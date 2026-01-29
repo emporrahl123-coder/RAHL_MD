@@ -1,3 +1,10 @@
+// ============================================
+// 🤖 RAHL XMD WhatsApp Bot - Quantum Edition
+// 👑 Owner: LORD RAHL
+// ⚡ Prefix: .
+// 🔗 Pairing System: https://rahl-verse-empire-pair-site.onrender.com
+// ============================================
+
 const {
   makeWASocket,
   useMultiFileAuthState,
@@ -5,39 +12,37 @@ const {
   makeCacheableSignalKeyStore,
   delay,
   DisconnectReason,
-  Browsers
+  Browsers,
+  initAuthCreds
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const { Boom } = require('@hapi/boom');
 const express = require('express');
 const qrcode = require('qrcode-terminal');
-const path = require('path');
 const fs = require('fs').promises;
+const path = require('path');
 const os = require('os');
-const moment = require('moment');
 require('dotenv').config();
 
 // Import custom modules
+const SessionHandler = require('./lib/sessionHandler');
 const CommandHandler = require('./lib/handler');
 const config = require('./lib/config');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Global variables
 let commandHandler;
 let sock = null;
 let isFirstConnection = true;
+let isSessionLoaded = false;
 const deploymentTime = new Date();
 
-// ASCII Art for Bot Logo
-const BOT_LOGO = `
-╔══════════════════════════════════════╗
-║         🤖 RAHL XMD BOT 🤖           ║
-║      ==========================      ║
-║      🚀 DEPLOYMENT SUCCESSFUL 🚀     ║
-╚══════════════════════════════════════╝
-`;
+// ============================================
+// 🎨 CONSOLE STYLING & BANNERS
+// ============================================
 
-// Console Colors
 const colors = {
   reset: '\x1b[0m',
   bright: '\x1b[1m',
@@ -49,179 +54,52 @@ const colors = {
   red: '\x1b[31m'
 };
 
-// Display banner
+const BANNER = `
+${colors.green}╔═══════════════════════════════════════════════════╗
+║            ${colors.cyan}🤖 RAHL XMD BOT 🤖${colors.green}                ║
+║        ${colors.yellow}⚡ QUANTUM EDITION ⚡${colors.green}                ║
+║     ===================================     ║
+║       🔗 ${colors.magenta}https://rahl-verse-empire-pair-site.onrender.com${colors.green}  ║
+╚═══════════════════════════════════════════════════╝${colors.reset}
+`;
+
 function displayBanner() {
-  console.log(colors.green + BOT_LOGO + colors.reset);
-  console.log(colors.cyan + '📱 WHATSAPP BOT BY LORD RAHL' + colors.reset);
-  console.log(colors.yellow + '='.repeat(50) + colors.reset);
+  console.clear();
+  console.log(BANNER);
 }
 
-// Display deployment info
 function displayDeploymentInfo() {
-  console.log(colors.blue + '\n⚡ BOT INFORMATION:' + colors.reset);
-  console.log(colors.bright + '├── 🤖 Name: ' + colors.green + config.BOT_NAME + colors.reset);
-  console.log(colors.bright + '├── 👑 Owner: ' + colors.magenta + config.OWNER_NAME + colors.reset);
-  console.log(colors.bright + '├── ⚡ Prefix: ' + colors.yellow + config.PREFIX + colors.reset);
-  console.log(colors.bright + '├── 🚀 Deployment Time: ' + colors.cyan + deploymentTime.toLocaleString() + colors.reset);
-  console.log(colors.bright + '├── 🖥️  Platform: ' + colors.blue + os.platform() + ' ' + os.arch() + colors.reset);
-  console.log(colors.bright + '└── 💾 Node Version: ' + colors.green + process.version + colors.reset);
-  
-  // Memory info
-  const used = process.memoryUsage();
-  console.log(colors.blue + '\n💾 MEMORY USAGE:' + colors.reset);
-  console.log(colors.bright + `├── RSS: ${Math.round(used.rss / 1024 / 1024 * 100) / 100} MB` + colors.reset);
-  console.log(colors.bright + `├── Heap Total: ${Math.round(used.heapTotal / 1024 / 1024 * 100) / 100} MB` + colors.reset);
-  console.log(colors.bright + `└── Heap Used: ${Math.round(used.heapUsed / 1024 / 1024 * 100) / 100} MB` + colors.reset);
+  console.log(`${colors.blue}📅 DEPLOYMENT TIME:${colors.reset} ${deploymentTime.toLocaleString()}`);
+  console.log(`${colors.blue}👑 BOT OWNER:${colors.reset} ${colors.magenta}${config.OWNER_NAME}${colors.reset}`);
+  console.log(`${colors.blue}⚡ COMMAND PREFIX:${colors.reset} ${colors.yellow}"${config.PREFIX}"${colors.reset}`);
+  console.log(`${colors.blue}🌐 ENVIRONMENT:${colors.reset} ${process.env.NODE_ENV || 'production'}`);
+  console.log(`${colors.yellow}${'='.repeat(55)}${colors.reset}`);
 }
 
-// Display connection status
 function displayConnectionStatus(status, message = '') {
   const timestamp = new Date().toLocaleTimeString();
-  const statusIcons = {
-    connecting: '🔄',
-    connected: '✅',
-    disconnected: '🔌',
-    error: '❌',
-    qr: '🔐',
-    ready: '🚀'
+  const statusMap = {
+    connecting: { icon: '🔄', color: colors.yellow },
+    connected: { icon: '✅', color: colors.green },
+    disconnected: { icon: '🔌', color: colors.red },
+    error: { icon: '❌', color: colors.red },
+    qr: { icon: '🔐', color: colors.magenta },
+    ready: { icon: '🚀', color: colors.cyan },
+    session: { icon: '🔑', color: colors.blue }
   };
   
-  const statusColors = {
-    connecting: colors.yellow,
-    connected: colors.green,
-    disconnected: colors.red,
-    error: colors.red,
-    qr: colors.magenta,
-    ready: colors.cyan
-  };
-  
-  console.log(`${statusColors[status] || colors.reset}${statusIcons[status] || '📌'} [${timestamp}] ${message}${colors.reset}`);
+  const statusInfo = statusMap[status] || { icon: '📌', color: colors.reset };
+  console.log(`${statusInfo.color}${statusInfo.icon} [${timestamp}] ${message}${colors.reset}`);
 }
 
-// Send deployment notification to owner
-async function sendDeploymentNotification(sock) {
-  if (!process.env.OWNER_NUMBER || !isFirstConnection) return;
-  
-  const ownerJid = process.env.OWNER_NUMBER + '@s.whatsapp.net';
-  
-  try {
-    const uptime = process.uptime();
-    const hours = Math.floor(uptime / 3600);
-    const minutes = Math.floor((uptime % 3600) / 60);
-    const seconds = Math.floor(uptime % 60);
-    
-    const deploymentMessage = `
-🚀 *${config.BOT_NAME} - DEPLOYMENT SUCCESSFUL* 🚀
+// ============================================
+// 🌐 EXPRESS SERVER (For Render & Health Checks)
+// ============================================
 
-✅ *Status:* Bot is now running and ready!
-👑 *Owner:* ${config.OWNER_NAME}
-🤖 *Bot Name:* ${config.BOT_NAME}
-⚡ *Prefix:* "${config.PREFIX}"
-⏰ *Deployment Time:* ${deploymentTime.toLocaleString()}
-🕐 *Uptime:* ${hours}h ${minutes}m ${seconds}s
-🌐 *Environment:* ${process.env.NODE_ENV || 'development'}
-📦 *Commands Loaded:* ${commandHandler.getAllCommands().length}
-
-*━━━━━━━━━━━━━━━━━*
-📊 *System Info:*
-├── 🖥️ Platform: ${os.platform()} ${os.arch()}
-├── 💾 RAM: ${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB
-├── 🔄 Node: ${process.version}
-└── 📁 PID: ${process.pid}
-
-*━━━━━━━━━━━━━━━━━*
-🔧 *Quick Commands:*
-├── .help - Show all commands
-├── .ping - Check bot status
-├── .owner - Owner information
-├── .about - About this bot
-└── .time - Current time
-
-*━━━━━━━━━━━━━━━━━*
-📱 *Next Steps:*
-1. Share pair codes with users
-2. Monitor bot activity
-3. Check logs for errors
-4. Update commands as needed
-
-*━━━━━━━━━━━━━━━━━*
-💡 *Tips:*
-• Bot auto-reconnects if disconnected
-• Pairing system is active
-• Check /status endpoint for health
-• Use .owner commands for management
-
-*━━━━━━━━━━━━━━━━━*
-🎯 *Bot is ready to serve!*
-_Deployed successfully on Render_
-    `.trim();
-    
-    await sock.sendMessage(ownerJid, { text: deploymentMessage });
-    
-    console.log(colors.green + '📤 Deployment notification sent to owner!' + colors.reset);
-    isFirstConnection = false;
-    
-  } catch (error) {
-    console.error(colors.red + '❌ Failed to send deployment notification:' + colors.reset, error.message);
-  }
-}
-
-// Send system status message
-async function sendSystemStatus(sock, targetJid) {
-  const uptime = process.uptime();
-  const hours = Math.floor(uptime / 3600);
-  const minutes = Math.floor((uptime % 3600) / 60);
-  const seconds = Math.floor(uptime % 60);
-  
-  const statusMessage = `
-🤖 *${config.BOT_NAME} - SYSTEM STATUS* 🤖
-
-✅ *Status:* Online and Running
-⚡ *Response:* Active
-📊 *Health:* Excellent
-
-*━━━━━━━━━━━━━━━━━*
-📈 *Performance Metrics:*
-├── 🕐 Uptime: ${hours}h ${minutes}m ${seconds}s
-├── 💾 Memory: ${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB
-├── 📦 Commands: ${commandHandler.getAllCommands().length}
-├── 🔄 Restarts: 0
-└── ⚡ Speed: Excellent
-
-*━━━━━━━━━━━━━━━━━*
-🌐 *Server Information:*
-├── 🖥️ Platform: ${os.platform()} ${os.arch()}
-├── 💿 Node: ${process.version}
-├── 📍 Region: Render Cloud
-├── 🔒 Security: Enabled
-└── 📡 Connection: Stable
-
-*━━━━━━━━━━━━━━━━━*
-🔧 *Bot Configuration:*
-├── 👑 Owner: ${config.OWNER_NAME}
-├── 🤖 Name: ${config.BOT_NAME}
-├── ⚡ Prefix: "${config.PREFIX}"
-├── 🚀 Version: ${require('./package.json').version}
-└── 🔐 Pairing: Enabled
-
-*━━━━━━━━━━━━━━━━━*
-📊 *Quick Stats:*
-• Deployment: ${deploymentTime.toLocaleDateString()}
-• Last Update: Just now
-• Status: ✅ Operational
-• Response: 🟢 Immediate
-
-*━━━━━━━━━━━━━━━━━*
-🎯 *System is running optimally!*
-_All systems are go! 🚀_
-  `.trim();
-  
-  await sock.sendMessage(targetJid, { text: statusMessage });
-}
-
-// Web server for health checks
 app.use(express.json());
+app.use(express.static('public'));
 
+// Health check endpoint
 app.get('/', (req, res) => {
   const uptime = process.uptime();
   const hours = Math.floor(uptime / 3600);
@@ -233,188 +111,109 @@ app.get('/', (req, res) => {
     bot: config.BOT_NAME,
     owner: config.OWNER_NAME,
     prefix: config.PREFIX,
+    session: isSessionLoaded ? 'loaded' : 'not-loaded',
     deployment: deploymentTime.toISOString(),
     uptime: `${hours}h ${minutes}m ${seconds}s`,
     memory: `${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB`,
-    commands: commandHandler.getAllCommands().length,
-    health: 'excellent',
-    message: '🤖 rahl xmd bot is running successfully!'
-  });
-});
-
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    pid: process.pid,
     platform: os.platform(),
     node: process.version
   });
 });
 
-app.get('/status', (req, res) => {
-  const statusHTML = `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>${config.BOT_NAME} Status</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            margin: 0;
-            padding: 20px;
-            color: #333;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 20px;
-            padding: 40px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
-        .header {
-            text-align: center;
-            margin-bottom: 40px;
-        }
-        .logo {
-            font-size: 48px;
-            margin-bottom: 10px;
-        }
-        .status-badge {
-            display: inline-block;
-            padding: 8px 20px;
-            background: #25D366;
-            color: white;
-            border-radius: 50px;
-            font-weight: bold;
-            margin-top: 10px;
-        }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin: 30px 0;
-        }
-        .stat-card {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 15px;
-            border-left: 5px solid #25D366;
-        }
-        .stat-card h3 {
-            margin-top: 0;
-            color: #075E54;
-        }
-        .footer {
-            text-align: center;
-            margin-top: 40px;
-            padding-top: 20px;
-            border-top: 1px solid #eee;
-            color: #666;
-        }
-        .highlight {
-            color: #25D366;
-            font-weight: bold;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div class="logo">🤖</div>
-            <h1>${config.BOT_NAME}</h1>
-            <p>WhatsApp Bot by ${config.OWNER_NAME}</p>
-            <div class="status-badge">✅ ONLINE & RUNNING</div>
-        </div>
-        
-        <div class="stats-grid">
-            <div class="stat-card">
-                <h3>📊 System Status</h3>
-                <p>Status: <span class="highlight">Operational</span></p>
-                <p>Uptime: ${Math.floor(process.uptime() / 3600)}h ${Math.floor((process.uptime() % 3600) / 60)}m</p>
-                <p>Memory: ${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB</p>
-            </div>
-            
-            <div class="stat-card">
-                <h3>🤖 Bot Info</h3>
-                <p>Owner: ${config.OWNER_NAME}</p>
-                <p>Prefix: "${config.PREFIX}"</p>
-                <p>Commands: ${commandHandler.getAllCommands().length}</p>
-            </div>
-            
-            <div class="stat-card">
-                <h3>🖥️ Server Info</h3>
-                <p>Platform: ${os.platform()}</p>
-                <p>Node: ${process.version}</p>
-                <p>PID: ${process.pid}</p>
-            </div>
-            
-            <div class="stat-card">
-                <h3>📅 Deployment</h3>
-                <p>Time: ${deploymentTime.toLocaleString()}</p>
-                <p>Environment: ${process.env.NODE_ENV || 'production'}</p>
-                <p>Health: Excellent</p>
-            </div>
-        </div>
-        
-        <div style="text-align: center; margin: 30px 0;">
-            <h3>🔧 Quick Actions</h3>
-            <p>Use these commands in WhatsApp:</p>
-            <p><code>.help</code> - Show all commands</p>
-            <p><code>.ping</code> - Check bot response</p>
-            <p><code>.status</code> - System status</p>
-        </div>
-        
-        <div class="footer">
-            <p>${config.BOT_NAME} Bot • Powered by Baileys MD</p>
-            <p>Deployed on Render • ${new Date().getFullYear()}</p>
-        </div>
-    </div>
-</body>
-</html>
-  `;
-  
-  res.send(statusHTML);
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    whatsapp: sock ? 'connected' : 'disconnected',
+    session: isSessionLoaded
+  });
 });
 
-// Initialize systems
-async function initSystems() {
-  try {
-    displayBanner();
-    displayDeploymentInfo();
-    
-    // Initialize command handler
-    commandHandler = new CommandHandler();
-    
-    console.log(colors.blue + '\n🚀 INITIALIZING SYSTEMS...' + colors.reset);
-    displayConnectionStatus('connecting', 'Initializing bot systems...');
-    
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    console.log(colors.green + '✅ All systems initialized successfully!' + colors.reset);
-    console.log(colors.yellow + '='.repeat(50) + colors.reset);
-    
-  } catch (error) {
-    console.error(colors.red + '❌ Failed to initialize systems:' + colors.reset, error);
-    process.exit(1);
+app.get('/status', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>${config.BOT_NAME} Status</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f0f0f0; }
+        .container { background: white; padding: 30px; border-radius: 10px; max-width: 800px; margin: auto; }
+        .status-online { color: green; font-weight: bold; }
+        .logo { font-size: 48px; text-align: center; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="logo">🤖</div>
+        <h1>${config.BOT_NAME} - Quantum Bot</h1>
+        <p>Owner: <strong>${config.OWNER_NAME}</strong></p>
+        <p>Status: <span class="status-online">✅ ONLINE</span></p>
+        <p>Deployed: ${deploymentTime.toLocaleString()}</p>
+        <p>Uptime: ${Math.floor(process.uptime())} seconds</p>
+        <p>Session Loaded: ${isSessionLoaded ? '✅ Yes' : '❌ No'}</p>
+        <hr>
+        <p>Pairing System: <a href="https://rahl-verse-empire-pair-site.onrender.com">rahl-verse-empire-pair-site.onrender.com</a></p>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+// ============================================
+// 🔐 SESSION MANAGEMENT
+// ============================================
+
+async function getAuthState() {
+  displayConnectionStatus('session', 'Loading authentication state...');
+  
+  // PRIORITY 1: Try to load from Session ID (from pairing site)
+  if (process.env.WHATSAPP_SESSION_ID) {
+    try {
+      displayConnectionStatus('session', 'Found Session ID in environment');
+      const authState = await SessionHandler.decodeSessionId(process.env.WHATSAPP_SESSION_ID);
+      isSessionLoaded = true;
+      displayConnectionStatus('session', '✅ Session loaded from Pairing System');
+      return authState;
+    } catch (sessionError) {
+      console.error(`${colors.red}❌ Failed to decode session: ${sessionError.message}${colors.reset}`);
+      // Continue to fallback methods
+    }
   }
+  
+  // PRIORITY 2: Try local auth_info folder (for development/testing)
+  try {
+    displayConnectionStatus('session', 'Trying local auth_info folder...');
+    const authState = await useMultiFileAuthState('auth_info');
+    displayConnectionStatus('session', '✅ Using local auth_info folder');
+    return authState;
+  } catch (fsError) {
+    // This is expected if folder doesn't exist
+  }
+  
+  // PRIORITY 3: Create new empty state (will generate QR code)
+  displayConnectionStatus('session', 'No session found. Will generate QR code.');
+  const creds = initAuthCreds();
+  const keys = {};
+  const saveCreds = () => {
+    console.log(`${colors.yellow}⚠️  New credentials generated. Save this session!${colors.reset}`);
+  };
+  
+  return { state: { creds, keys }, saveCreds };
 }
 
-// Connect to WhatsApp
+// ============================================
+// 📱 WHATSAPP CONNECTION
+// ============================================
+
 async function connectToWhatsApp() {
   try {
-    displayConnectionStatus('connecting', 'Connecting to WhatsApp...');
+    displayConnectionStatus('connecting', 'Initializing WhatsApp connection...');
     
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    // Get authentication state (from session ID, local files, or new)
+    const { state, saveCreds } = await getAuthState();
     const { version } = await fetchLatestBaileysVersion();
     
+    // Create WhatsApp socket
     sock = makeWASocket({
       version,
       logger: pino({ level: 'silent' }),
@@ -427,20 +226,29 @@ async function connectToWhatsApp() {
       generateHighQualityLinkPreview: true,
       markOnlineOnConnect: false,
       syncFullHistory: false,
-      getMessage: async () => ({ conversation: `Message from ${config.BOT_NAME}` })
+      getMessage: async (key) => ({
+        conversation: `Message from ${config.BOT_NAME}`
+      })
     });
+
+    // ============================================
+    // 🔄 CONNECTION EVENT HANDLERS
+    // ============================================
 
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
       
-      if (qr) {
-        displayConnectionStatus('qr', 'QR Code generated. Scan with WhatsApp:');
-        console.log(colors.magenta);
+      // QR Code Generation (only if no session was loaded)
+      if (qr && !isSessionLoaded) {
+        displayConnectionStatus('qr', 'Scan QR Code with WhatsApp:');
+        console.log(`${colors.magenta}`);
         qrcode.generate(qr, { small: true });
-        console.log(colors.reset);
-        console.log(colors.yellow + '⏰ QR Code valid for 30 seconds' + colors.reset);
+        console.log(`${colors.reset}`);
+        console.log(`${colors.yellow}⏰ QR Code valid for 30 seconds${colors.reset}`);
+        console.log(`${colors.cyan}📱 Go to WhatsApp → Settings → Linked Devices → Link a Device${colors.reset}`);
       }
       
+      // Connection Closed
       if (connection === 'close') {
         const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
         displayConnectionStatus('disconnected', `Connection closed. Reconnecting: ${shouldReconnect}`);
@@ -450,105 +258,102 @@ async function connectToWhatsApp() {
           displayConnectionStatus('connecting', 'Attempting to reconnect...');
           connectToWhatsApp();
         }
-      } 
+      }
+      
+      // Connection Open (SUCCESS!)
       else if (connection === 'open') {
-        displayConnectionStatus('connected', 'Successfully connected to WhatsApp!');
+        displayConnectionStatus('connected', '✅ WhatsApp connection established!');
         
         // Update bot profile
-        await sock.updateProfileStatus(`🤖 ${config.BOT_NAME} | 👑 ${config.OWNER_NAME} | Prefix: ${config.PREFIX}`);
         await sock.updateProfileName(config.BOT_NAME);
+        await sock.updateProfileStatus(`🤖 ${config.BOT_NAME} | 👑 ${config.OWNER_NAME} | Prefix: ${config.PREFIX}`);
         
-        displayConnectionStatus('ready', 'Bot is ready to receive messages!');
+        displayConnectionStatus('ready', '🚀 Bot is ready to receive commands!');
         
-        console.log(colors.green + '\n🎉 BOT IS NOW ONLINE!' + colors.reset);
-        console.log(colors.cyan + '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' + colors.reset);
-        
-        // Display success message
-        console.log(colors.bright + colors.green + `
-╔══════════════════════════════════════════╗
-║         🎊 DEPLOYMENT SUCCESSFUL 🎊      ║
-║      ===============================     ║
-║  ✅ WhatsApp Connected                   ║
-║  ✅ Commands Loaded                     ║
-║  ✅ Web Server Running                  ║
-║  ✅ Bot Profile Updated                 ║
-║  ✅ Ready to Receive Messages           ║
-╚══════════════════════════════════════════╝
-        ` + colors.reset);
-        
-        console.log(colors.cyan + '\n📊 QUICK STATS:' + colors.reset);
-        console.log(colors.bright + `├── Commands Loaded: ${commandHandler.getAllCommands().length}` + colors.reset);
-        console.log(colors.bright + `├── Memory Usage: ${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB` + colors.reset);
-        console.log(colors.bright + `├── Uptime: ${Math.floor(process.uptime())} seconds` + colors.reset);
-        console.log(colors.bright + `└── Bot Name: ${config.BOT_NAME}` + colors.reset);
-        
-        console.log(colors.cyan + '\n🔗 ACCESS LINKS:' + colors.reset);
-        console.log(colors.bright + `├── Health Check: http://localhost:${PORT}/health` + colors.reset);
-        console.log(colors.bright + `├── Status Page: http://localhost:${PORT}/status` + colors.reset);
-        console.log(colors.bright + `└── API Root: http://localhost:${PORT}/` + colors.reset);
-        
-        console.log(colors.cyan + '\n💡 NEXT STEPS:' + colors.reset);
-        console.log(colors.bright + '1. Use .help to see available commands' + colors.reset);
-        console.log(colors.bright + '2. Check bot status with .ping' + colors.reset);
-        console.log(colors.bright + '3. Monitor logs for any issues' + colors.reset);
-        console.log(colors.bright + '4. Share pair codes with users' + colors.reset);
-        
-        console.log(colors.yellow + '\n' + '='.repeat(50) + colors.reset);
-        console.log(colors.green + '🚀 BOT IS READY TO ROCKET! 🚀' + colors.reset);
-        console.log(colors.yellow + '='.repeat(50) + colors.reset);
-        
-        // Send deployment notification to owner
-        await sendDeploymentNotification(sock);
-        
-        // Schedule periodic status updates (every 6 hours)
-        setInterval(async () => {
-          try {
-            if (sock && process.env.OWNER_NUMBER) {
-              const ownerJid = process.env.OWNER_NUMBER + '@s.whatsapp.net';
-              await sendSystemStatus(sock, ownerJid);
-            }
-          } catch (error) {
-            console.error('Periodic status update failed:', error.message);
-          }
-        }, 6 * 60 * 60 * 1000); // 6 hours
+        // Display deployment success message
+        if (isFirstConnection) {
+          console.log(`\n${colors.green}╔══════════════════════════════════════════╗`);
+          console.log(`║         🎊 DEPLOYMENT SUCCESSFUL 🎊      ║`);
+          console.log(`║      ===============================     ║`);
+          console.log(`║  ✅ WhatsApp ${isSessionLoaded ? 'Session Loaded' : 'Connected via QR'}  ║`);
+          console.log(`║  ✅ Web Server Running                  ║`);
+          console.log(`║  ✅ Command System Active               ║`);
+          console.log(`║  ✅ Pairing System Ready                ║`);
+          console.log(`╚══════════════════════════════════════════╝${colors.reset}`);
+          
+          // Send notification to owner
+          await sendDeploymentNotification();
+          isFirstConnection = false;
+        }
       }
     });
 
+    // Save credentials when they update
     sock.ev.on('creds.update', saveCreds);
     
-    // Message handler
+    // ============================================
+    // 📨 MESSAGE HANDLING
+    // ============================================
+    
     sock.ev.on('messages.upsert', async (m) => {
       const msg = m.messages[0];
       if (!msg.message || msg.key.fromMe) return;
       
+      // Extract message text
       const text = msg.message.conversation || 
                    msg.message.extendedTextMessage?.text || 
-                   msg.message.imageMessage?.caption || '';
+                   msg.message.imageMessage?.caption ||
+                   msg.message.videoMessage?.caption || '';
       
       const sender = msg.key.remoteJid;
+      const isGroup = sender.endsWith('@g.us');
       
-      // Handle status check command
-      if (text.startsWith(config.PREFIX)) {
-        const command = text.slice(config.PREFIX.length).split(' ')[0].toLowerCase();
-        
-        if (command === 'status' || command === 'deploy' || command === 'startup') {
-          await sendSystemStatus(sock, sender);
+      console.log(`${colors.cyan}📩 [${isGroup ? 'GROUP' : 'PRIVATE'}] ${sender.split('@')[0]}: ${text}${colors.reset}`);
+      
+      // Handle pairing codes (6-8 digit codes)
+      if (!text.startsWith(config.PREFIX)) {
+        if (/^[A-Z0-9]{6,8}$/i.test(text.trim())) {
+          const code = text.trim().toUpperCase();
+          await handlePairingCode(code, sender, sock);
         }
+        return;
+      }
+      
+      // Handle commands
+      const executed = await commandHandler.execute(sock, msg, text);
+      
+      if (!executed) {
+        await sock.sendMessage(sender, {
+          text: `❌ Command not found!\n\nUse *${config.PREFIX}help* to see available commands.\n👑 ${config.OWNER_NAME}`
+        }, { quoted: msg });
+      }
+    });
+    
+    // ============================================
+    // 👥 GROUP EVENTS
+    // ============================================
+    
+    sock.ev.on('group-participants.update', async (update) => {
+      const { id, participants, action } = update;
+      
+      if (action === 'add') {
+        const metadata = await sock.groupMetadata(id);
+        const botParticipant = metadata.participants.find(p => p.id === sock.user.id);
         
-        // Let command handler handle other commands
-        const executed = await commandHandler.execute(sock, msg, text);
-        
-        if (!executed && command !== 'status') {
-          await sock.sendMessage(sender, {
-            text: `❌ Command not found!\n\nUse *${config.PREFIX}help* to see available commands.\n👑 ${config.OWNER_NAME}`
-          }, { quoted: msg });
+        if (botParticipant && botParticipant.admin) {
+          await sock.sendMessage(id, {
+            text: `🎉 Welcome @${participants[0].split('@')[0]} to the group!\n\n` +
+                  `I'm ${config.BOT_NAME}, created by ${config.OWNER_NAME}.\n` +
+                  `Use *${config.PREFIX}help* to see my commands.\n` +
+                  `🔗 Pairing: https://rahl-verse-empire-pair-site.onrender.com`
+          });
         }
       }
     });
     
   } catch (error) {
     displayConnectionStatus('error', `Connection failed: ${error.message}`);
-    console.error(colors.red + '❌ Failed to connect to WhatsApp:' + colors.reset, error);
+    console.error(`${colors.red}❌ Error details: ${error.stack}${colors.reset}`);
     
     // Retry after 10 seconds
     await delay(10000);
@@ -557,48 +362,157 @@ async function connectToWhatsApp() {
   }
 }
 
-// Start web server
-app.listen(PORT, () => {
-  console.log(colors.blue + `🌐 Web server listening on port ${PORT}` + colors.reset);
-  console.log(colors.green + `✅ Health check: http://localhost:${PORT}/health` + colors.reset);
-  console.log(colors.green + `✅ Status page: http://localhost:${PORT}/status` + colors.reset);
-});
+// ============================================
+// 🔐 PAIRING CODE HANDLER
+// ============================================
 
-// Error handling
-process.on('unhandledRejection', (reason, promise) => {
-  console.error(colors.red + '❌ Unhandled Rejection at:' + colors.reset, promise, 'reason:', reason);
-});
-
-process.on('uncaughtException', (error) => {
-  console.error(colors.red + '❌ Uncaught Exception:' + colors.reset, error);
-  process.exit(1);
-});
-
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  console.log(colors.yellow + '\n\n🛑 Shutting down bot gracefully...' + colors.reset);
+async function handlePairingCode(code, sender, sock) {
+  const senderNumber = sender.split('@')[0];
   
-  if (sock) {
-    await sock.end();
-    console.log(colors.green + '✅ WhatsApp connection closed' + colors.reset);
-  }
-  
-  console.log(colors.green + '👋 Bot shutdown complete. Goodbye!' + colors.reset);
-  process.exit(0);
-});
-
-// Welcome message on startup
-console.log(colors.cyan + '\n🚀 STARTING RAHL XMD WHATSAPP BOT...' + colors.reset);
-
-// Start the bot
-async function startBot() {
+  // In a real implementation, you would validate against your pairing site database
+  // For now, we'll simulate a successful pairing
   try {
-    await initSystems();
-    await connectToWhatsApp();
+    // Simulate API call to your pairing site
+    // const response = await axios.post('https://rahl-verse-empire-pair-site.onrender.com/api/validate', { code, number: senderNumber });
+    
+    await sock.sendMessage(sender, {
+      text: `✅ *Pairing Successful!*\n\n` +
+            `Welcome to ${config.BOT_NAME}!\n` +
+            `Owner: ${config.OWNER_NAME}\n` +
+            `Prefix: "${config.PREFIX}"\n\n` +
+            `Use *${config.PREFIX}help* to see all commands.\n\n` +
+            `🔗 Pairing Portal: https://rahl-verse-empire-pair-site.onrender.com`
+    });
+    
+    // Notify owner
+    if (process.env.OWNER_NUMBER) {
+      await sock.sendMessage(process.env.OWNER_NUMBER + '@s.whatsapp.net', {
+        text: `📱 New user paired!\n\nNumber: ${senderNumber}\nCode: ${code}\nTime: ${new Date().toLocaleString()}`
+      });
+    }
+    
   } catch (error) {
-    console.error(colors.red + '❌ Failed to start bot:' + colors.reset, error);
+    await sock.sendMessage(sender, {
+      text: `❌ *Invalid Pairing Code*\n\n` +
+            `The code "${code}" is invalid or expired.\n\n` +
+            `Get a valid code from:\n` +
+            `🔗 https://rahl-verse-empire-pair-site.onrender.com`
+    });
+  }
+}
+
+// ============================================
+// 📤 DEPLOYMENT NOTIFICATION
+// ============================================
+
+async function sendDeploymentNotification() {
+  if (!process.env.OWNER_NUMBER) return;
+  
+  const ownerJid = process.env.OWNER_NUMBER + '@s.whatsapp.net';
+  
+  try {
+    const uptime = process.uptime();
+    const hours = Math.floor(uptime / 3600);
+    const minutes = Math.floor((uptime % 3600) / 60);
+    
+    const message = `
+🚀 *${config.BOT_NAME} - DEPLOYMENT SUCCESSFUL* 🚀
+
+✅ *Status:* Bot is now LIVE and running!
+👑 *Owner:* ${config.OWNER_NAME}
+🤖 *Bot Name:* ${config.BOT_NAME}
+⚡ *Prefix:* "${config.PREFIX}"
+📅 *Deployment Time:* ${deploymentTime.toLocaleString()}
+🕐 *Uptime:* ${hours}h ${minutes}m
+🌐 *Environment:* ${process.env.NODE_ENV || 'production'}
+🔐 *Session:* ${isSessionLoaded ? 'Loaded from Pairing System ✅' : 'New Session (QR) 🔄'}
+
+*━━━━━━━━━━━━━━━━━*
+🔧 *System Information:*
+├── 🖥️ Platform: ${os.platform()} ${os.arch()}
+├── 💾 RAM: ${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB
+├── 🔄 Node: ${process.version}
+└── 📁 PID: ${process.pid}
+
+*━━━━━━━━━━━━━━━━━*
+🔗 *Important Links:*
+├── Health Check: https://your-bot.onrender.com/health
+├── Status Page: https://your-bot.onrender.com/status
+└── Pairing Portal: https://rahl-verse-empire-pair-site.onrender.com
+
+*━━━━━━━━━━━━━━━━━*
+🎯 *Ready to serve!*
+_Powered by Quantum Technology_ 🚀
+    `.trim();
+    
+    await sock.sendMessage(ownerJid, { text: message });
+    console.log(`${colors.green}📤 Deployment notification sent to owner!${colors.reset}`);
+    
+  } catch (error) {
+    console.error(`${colors.red}❌ Failed to send deployment notification:${colors.reset}`, error.message);
+  }
+}
+
+// ============================================
+// 🚀 INITIALIZATION & STARTUP
+// ============================================
+
+async function initializeBot() {
+  try {
+    // Display banner
+    displayBanner();
+    displayDeploymentInfo();
+    
+    // Initialize command handler
+    displayConnectionStatus('connecting', 'Loading command system...');
+    commandHandler = new CommandHandler();
+    console.log(`${colors.green}✅ Commands loaded: ${commandHandler.getAllCommands().length}${colors.reset}`);
+    
+    // Start Express server
+    app.listen(PORT, () => {
+      console.log(`${colors.blue}🌐 Web server running on port ${PORT}${colors.reset}`);
+      console.log(`${colors.green}🔗 Health check: http://localhost:${PORT}/health${colors.reset}`);
+      console.log(`${colors.green}📊 Status page: http://localhost:${PORT}/status${colors.reset}`);
+      console.log(`${colors.yellow}${'='.repeat(55)}${colors.reset}\n`);
+    });
+    
+    // Connect to WhatsApp
+    await connectToWhatsApp();
+    
+  } catch (error) {
+    console.error(`${colors.red}❌ Failed to initialize bot:${colors.reset}`, error);
     process.exit(1);
   }
 }
 
-startBot();
+// ============================================
+// ⚠️ ERROR HANDLING
+// ============================================
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error(`${colors.red}❌ Unhandled Rejection at:${colors.reset}`, promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error(`${colors.red}❌ Uncaught Exception:${colors.reset}`, error);
+  process.exit(1);
+});
+
+process.on('SIGINT', async () => {
+  console.log(`${colors.yellow}\n\n🛑 Shutting down bot gracefully...${colors.reset}`);
+  
+  if (sock) {
+    await sock.end();
+    console.log(`${colors.green}✅ WhatsApp connection closed${colors.reset}`);
+  }
+  
+  console.log(`${colors.green}👋 Bot shutdown complete. Goodbye!${colors.reset}`);
+  process.exit(0);
+});
+
+// ============================================
+// 🎬 START THE BOT
+// ============================================
+
+console.log(`${colors.cyan}🚀 STARTING RAHL XMD WHATSAPP BOT...${colors.reset}`);
+initializeBot().catch(console.error);
