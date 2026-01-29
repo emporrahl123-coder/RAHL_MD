@@ -2,11 +2,36 @@ services:
   - type: web
     name: rahl-xmd-bot
     env: node
-    buildCommand: npm install
-    startCommand: npm start
+    buildCommand: |
+      echo "🚀 Starting rahl xmd bot deployment..."
+      npm install
+      echo "✅ Dependencies installed"
+    startCommand: |
+      echo "🎉 DEPLOYMENT INITIATED - $(date)"
+      echo "🤖 Bot: rahl xmd"
+      echo "👑 Owner: LORD RAHL"
+      echo "⚡ Prefix: ."
+      echo "🌐 Port: $PORT"
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      npm start
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 3000
+      - key: BOT_NAME
+        value: rahl xmd
+      - key: OWNER_NAME
+        value: LORD RAHL
+      - key: PREFIX
+        value: .
+    healthCheckPath: /health
     autoDeploy: true
+
+# Deployment notifications
+hooks:
+  postDeploy:
+    - curl -X POST https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys/$RENDER_DEPLOY_ID/notify \
+        -H "Authorization: Bearer $RENDER_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d '{"type": "success", "message": "🤖 rahl xmd bot deployed successfully!"}'
